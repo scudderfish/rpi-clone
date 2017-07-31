@@ -1,9 +1,21 @@
 #!/bin/bash
 
-VERSION=1.3
-# Version 1.3	2015/06/18
+VERSION=1.6
+# Version 1.6	2017/05/24
+#	* Split rsync into 2 separate processes, 1 for /boot, 1 for rest of filesystem
+#	* made do not cross filesytem boundaries default behaviour
+#	* added --cross-filesystems switch to reproduce old behaviour
+#	* No longer need to manually mkdir optional /mnt directories.
+#	* No longer need to rsync exclude /mnt and /media
+# Version 1.5	2016/09/09
+#	* Remove any leading /dev/ from dest disk.
+#	* Warn dest disk may be a partition if it ends with a digit.
+# Version 1.4	2016/03/23
+#	* Use -F on mkfs.ext4 and avoid the question.
+# Version 1.3	2016/03/16
+#	* don't > /dev/null for the mkfs.ext4 since mkfs can ask a question
 #	* add -q (quiet) option for use as cron script
-#         -q only works with existing backups, 
+#         -q only works with existing backups,
 #         it won't initialize the destination SD card partitions with dd!
 #         Please initialize the destination SD card from the shell (by hand)
 #         for the first time.
@@ -22,10 +34,7 @@ VERSION=1.3
 
 PGM=`basename $0`
 
-RSYNC_OPTIONS="--force -rltWDEgopt"
-
-# List of extra dirs to create under /mnt.
-OPTIONAL_MNT_DIRS="clone mnt sda sdb rpi0 rpi1"
+RSYNC_OPTIONS="--force -rltWDEgoptx"
 
 # Where to mount the disk filesystems to be rsynced.
 CLONE=/mnt/clone
@@ -66,10 +75,11 @@ fi
 usage()
 	{
 	echo ""
-	echo "usage: $PGM sdN {-f|--force-initialize} {-v|--verbose} {-x} {-q|--quite}"
+	echo "usage: $PGM sdN {-f|--force-initialize} {-v|--verbose} {-q|--quiet} {-c|--cross-filesystems} {-x}"
 	echo "    Example:  $PGM sda"
 	echo "    -v - list all files as they are copied."
 	echo "    -f - force initialize the destination partitions"
+	echo "    -c - cross filesystem boundaries (include mounted drives)"
 	echo "    -x - use set -x for very verbose bash shell script debugging"
 	echo "    -q - use quiet modus to schedule the script as a cron script"
 	echo ""
@@ -94,6 +104,10 @@ usage()
 	echo "    The SD card  partitions are then mounted and rsynced to the"
 	echo "    running system."
 	echo ""
+	echo "    By default the rsync operation will not cross filesystem boundaries."
+	echo "    Use the -c switch if you wish to include your mounted drive(s)"
+	echo "    Warning: any disk mounted under /mnt or /media will then be included."
+	echo ""
 	echo "    The SD card destination partitions will be mounted on $CLONE."
 	echo "    A log will be written to $CLONE_LOG."
 	echo "    It's better to avoid running other disk writing programs"
@@ -104,7 +118,8 @@ usage()
 	}
 
 VERBOSE=off
-QUITE_FOR_CRON=false
+QUIET_FOR_CRON=false
+CROSS_FILESYSTEMS=off
 
 while [ "$1" ]
 do
@@ -116,14 +131,18 @@ do
 		-f|--force-initialize)
 			FORCE_INITIALIZE=true
 			;;
+		-c|--cross-filesystems)
+			CROSS_FILESYSTEMS=on
+			RSYNC_OPTIONS=${RSYNC_OPTIONS/x}
+			;;
 		-x)
 			set -x
 			;;
 		-h|--help)
 			usage
 			;;
-		-q|--quite)
-			QUITE_FOR_CRON=true
+		-q|--quiet)
+			QUIET_FOR_CRON=true
 			;;
 		*)
 			if [ "$DST_DISK" != "" ]
@@ -144,6 +163,13 @@ then
 	exit 0
 fi
 
+# Remove leading /dev/
+DIR=`expr substr $DST_DISK 1 5`
+if [ "$DIR" == "/dev/" ]
+then
+	DST_DISK=${DST_DISK#/dev/}
+fi
+
 if ! cat /proc/partitions | grep -q $DST_DISK
 then
 	echo "Destination disk '$DST_DISK' does not exist."
@@ -153,11 +179,28 @@ then
 	exit 0
 fi
 
+CHK_DISK=`cat /proc/partitions | grep -m 1 $DST_DISK`
+D=${CHK_DISK: -1}
+if [ "$D" -eq "$D" ] 2>/dev/null
+then
+	echo "  The target disk you entered, $DST_DISK, ends with a digit and this"
+	echo "  may mean you have given a partition name instead of a disk name."
+	echo "  For example, if you want to clone to a disk sda,"
+	echo "  specify sda and not one of its partition names like sda1 or sda2."
+	echo -n "Do you want to continue anyway? (yes/no):"
+	read resp
+	if [ "$resp" != "y" ] && [ "$resp" != "yes" ]
+	then
+		echo ""
+		exit 0
+	fi
+fi
+
 unmount_or_abort()
 	{
-	if [ "$QUITE_FOR_CRON" = "true" ]
+	if [ "$QUIET_FOR_CRON" = "true" ]
 	then
-		echo "Sorry, mounted devices in quite_cron mode is not allowed."
+		echo "Sorry, mounted devices in quiet_cron mode is not allowed."
 		echo -e "Aborting!\n"
 		exit 0
 	fi
@@ -206,7 +249,7 @@ if [ "$TEST_MOUNTED" != "" ]
 then
 	echo "This script uses $CLONE for mounting filesystems, but"
 	echo "$CLONE is already mounted with $TEST_MOUNTED."
-	unmount_or_abort $CLONE 
+	unmount_or_abort $CLONE
 fi
 
 if [ ! -d $CLONE ]
@@ -264,9 +307,9 @@ if [ "$DST_BOOT_PARTITION_TYPE" != "$SRC_BOOT_PARTITION_TYPE" ] || \
    [ "$DST_ROOT_PARTITION_TYPE" != "$SRC_ROOT_PARTITION_TYPE" ] || \
    [ "$FORCE_INITIALIZE" = "true" ]
 then
-	if [ "$QUITE_FOR_CRON" = "true" ]
+	if [ "$QUIET_FOR_CRON" = "true" ]
 	then
-		echo "Sorry, now new disk setup allowed in quite_cron mode."
+		echo "Sorry, now new disk setup allowed in quiet_cron mode."
 		echo -e "Aborting!\n"
 		exit 0
 	fi
@@ -330,7 +373,7 @@ then
 		#
 		echo "Sizing partition 2 (root partition) to use all SD card space..."
 		expand_rootfs
-		mkfs.ext4 $DST_ROOT_PARTITION > /dev/null
+		mkfs.ext4 -F $DST_ROOT_PARTITION
 
 		echo ""
 		echo "/dev/$DST_DISK is initialized and resized.  Its partitions are:"
@@ -370,6 +413,7 @@ echo "Clone destination disk   :  $DST_DISK"
 echo "Clone destination rootfs :  $DST_ROOT_PARTITION ($DST_ROOT_VOL_NAME) on ${CLONE}"
 echo "Clone destination bootfs :  $DST_BOOT_PARTITION on ${CLONE}/boot"
 echo "Verbose mode             :  $VERBOSE"
+echo "Cross filesystems        :  $CROSS_FILESYSTEMS"
 echo "==============================="
 
 
@@ -377,7 +421,7 @@ echo "==============================="
 # in another terminal with:  watch df -h
 #
 
-if [ "$QUITE_FOR_CRON" != "true" ]
+if [ "$QUIET_FOR_CRON" != "true" ]
 then
 	echo -n "Final check, is it Ok to proceed with the clone (yes/no)?: "
 	read resp
@@ -433,25 +477,32 @@ then
 	EXCLUDE_SWAPFILE="--exclude $SWAPFILE"
 fi
 
+# start sync
+#
 START_TIME=`date '+%H:%M:%S'`
+sync
 
+# /boot rsync
+echo "Starting the /boot rsync to $DST_DISK"
+rsync $RSYNC_OPTIONS --delete /boot/ ${CLONE}/boot/
+
+# rest of filesystem rsync
 # Exclude fuse mountpoint .gvfs, various other mount points, and tmpfs
 # file systems from the rsync.
 #
-sync
 echo "Starting the filesystem rsync to $DST_DISK"
 echo -n "(This may take several minutes)..."
 rsync $RSYNC_OPTIONS --delete \
 		$EXCLUDE_SWAPFILE \
 		--exclude '.gvfs' \
 		--exclude '/dev' \
-		--exclude '/media' \
-		--exclude '/mnt' \
+		--exclude '/mnt/clone' \
 		--exclude '/proc' \
 		--exclude '/run' \
 		--exclude '/sys' \
 		--exclude '/tmp' \
 		--exclude 'lost\+found' \
+		--exclude '/boot' \
 	// \
 	$CLONE
 
@@ -474,14 +525,6 @@ then
 	chmod a+w $CLONE/tmp
 fi
 
-# Some extra optional dirs I create under /mnt
-for i in $OPTIONAL_MNT_DIRS
-do
-	if [ ! -d $CLONE/mnt/$i ]
-	then
-		mkdir $CLONE/mnt/$i
-	fi
-done
 
 rm -f $CLONE/etc/udev/rules.d/70-persistent-net.rules
 
@@ -506,7 +549,7 @@ echo ""
 # Eg. modify $CLONE/etc/hostname, $CLONE/etc/network/interfaces, etc
 # if I'm cloning into a card to be installed on another Pi.
 #
-if [ "$QUITE_FOR_CRON" != "true" ]
+if [ "$QUIET_FOR_CRON" != "true" ]
 then
 	echo -n "Hit Enter when ready to unmount the /dev/$DST_DISK partitions..."
 	read resp

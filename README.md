@@ -2,11 +2,13 @@
 rpi-clone is a shell script that will back up (clone using dd and rsync)
 a running Raspberry Pi file system to a destination SD card 'sdN' plugged
 into a Pi USB port (via a USB card reader).
+
 I use it to maintain backups of several Pi SD cards I have and the destination
 backup SD cards can be a different size (smaller or larger) than the booted
-SD card.  rpi-clone works on Raspberry Pi disks which have a VFAT boot
+SD card.  rpi-clone works on Raspberry Pi distributions which have a VFAT boot
 partition 1 and a Linux root partition 2.  Tested on Raspbian but should
 work on other distributions which have this same two partition structure.
+rpi-clone does not work with NOOBS.
 
 rpi-clone can clone the running system to a new SD card or can incrementally
 rsync to existing backup Raspberry Pi SD cards.  During the clone to new SD
@@ -41,6 +43,11 @@ writing many temporary files.
 
 rpi-clone must be run as root and you must have the rsync program installed.
 
+rpi-clone will not cross filesystem boundaries by default - this is normally
+desirable. If you wish to include your mounted drive(s) in the clone,
+use the -c switch.  But use this option with caution since any disk mounted
+under /mnt or /media will be included in the clone.
+
 After rpi-clone is finished with the clone it pauses and asks for confirmation
 before unmounting the cloned to SD card.  This is so you can go look at
 the clone results or make any custom final adjustments if needed.  For example,
@@ -71,6 +78,12 @@ or, use git to clone the repository:
 	$ cd rpi-clone
 	$ cp rpi-clone /usr/local/sbin
 
+For a French translation of rpi-clone by Mehdi HAMIDA, go to:
+    https://github.com/idem2lyon/rpi-clone
+
+GTR2Fan on the Pi forums has instructions for putting rpi-clone into
+the menu of the desktop GUI:
+	https://www.raspberrypi.org/forums/viewtopic.php?f=29&t=137693&p=914109#p914109
 
 Bill Wilson
 billw--at--gkrellm.net
